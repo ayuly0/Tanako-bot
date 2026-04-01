@@ -162,59 +162,28 @@ class DatabaseManager:
             await self.client.insert('moderation_cases', data)
     
     async def get_ticket_by_channel(self, channel_id: int) -> Optional[Ticket]:
-        result = await self.client.find_one('tickets', {'channel_id': channel_id})
-        
-        if not result:
-            return None
-        
-        ticket_data = result.get('data')
-        if ticket_data and isinstance(ticket_data, dict) and 'ticket_id' in ticket_data:
-            return Ticket.from_dict(ticket_data)
-        
-        if 'ticket_id' in result:
-            return Ticket.from_dict({
-                'ticket_id': result.get('ticket_id'),
-                'guild_id': result.get('guild_id'),
-                'channel_id': result.get('channel_id'),
-                'creator_id': result.get('creator_id'),
-                'category_id': result.get('category_id', 'general'),
-                'status': result.get('status', 'open'),
-                'priority': result.get('priority', 2),
-                'subject': result.get('subject', ''),
-                'description': result.get('description', ''),
-                'created_at': result.get('created_at'),
-                'updated_at': result.get('updated_at'),
-                'closed_at': result.get('closed_at'),
-                'claimed_by': result.get('claimed_by'),
-                'closed_by': result.get('closed_by'),
-                'close_reason': result.get('close_reason'),
-                'added_users': result.get('added_users', []),
-                'tags': result.get('tags', []),
-                'message_count': result.get('message_count', 0),
-                'staff_message_count': result.get('staff_message_count', 0),
-                'first_response_at': result.get('first_response_at'),
-                'first_response_by': result.get('first_response_by'),
-                'rating': result.get('rating'),
-                'feedback': result.get('feedback'),
-                'notes': result.get('notes', []),
-                'transcript_url': result.get('transcript_url')
-            })
-        
-        return None
-    
-    async def get_user_open_tickets(self, guild_id: int, user_id: int) -> List[Ticket]:
-        results = await self.client.select('tickets', conditions={
-            'guild_id': guild_id,
-            'creator_id': user_id
-        })
-        
-        tickets = []
-        for result in results:
+        try:
+            result = await self.client.find_one('tickets', {'channel_id': channel_id})
+            
+            if not result:
+                return None
+            
+            # Try to load from JSON data blob first
             ticket_data = result.get('data')
-            if ticket_data and isinstance(ticket_data, dict) and 'ticket_id' in ticket_data:
-                ticket = Ticket.from_dict(ticket_data)
-            elif 'ticket_id' in result:
-                ticket = Ticket.from_dict({
+            if ticket_data:
+                if isinstance(ticket_data, str):
+                    import json
+                    try:
+                        ticket_data = json.loads(ticket_data)
+                    except json.JSONDecodeError:
+                        ticket_data = None
+                
+                if isinstance(ticket_data, dict) and 'ticket_id' in ticket_data:
+                    return Ticket.from_dict(ticket_data)
+            
+            # Fallback to columns if data blob is missing or invalid
+            if 'ticket_id' in result:
+                return Ticket.from_dict({
                     'ticket_id': result.get('ticket_id'),
                     'guild_id': result.get('guild_id'),
                     'channel_id': result.get('channel_id'),
@@ -222,17 +191,79 @@ class DatabaseManager:
                     'category_id': result.get('category_id', 'general'),
                     'status': result.get('status', 'open'),
                     'priority': result.get('priority', 2),
+                    'subject': result.get('subject', ''),
+                    'description': result.get('description', ''),
                     'created_at': result.get('created_at'),
+                    'updated_at': result.get('updated_at'),
                     'closed_at': result.get('closed_at'),
                     'claimed_by': result.get('claimed_by'),
+                    'closed_by': result.get('closed_by'),
+                    'close_reason': result.get('close_reason'),
+                    'added_users': result.get('added_users', []),
+                    'tags': result.get('tags', []),
+                    'message_count': result.get('message_count', 0),
+                    'staff_message_count': result.get('staff_message_count', 0),
+                    'first_response_at': result.get('first_response_at'),
+                    'first_response_by': result.get('first_response_by'),
+                    'rating': result.get('rating'),
+                    'feedback': result.get('feedback'),
+                    'notes': result.get('notes', []),
+                    'transcript_url': result.get('transcript_url')
                 })
-            else:
-                continue
             
-            if ticket.is_open:
-                tickets.append(ticket)
-        
-        return tickets
+            return None
+        except Exception as e:
+            import logging
+            logging.getLogger('db_manager').error(f"Error reading ticket by channel {channel_id}: {e}")
+            return None
+    
+    async def get_user_open_tickets(self, guild_id: int, user_id: int) -> List[Ticket]:
+        try:
+            results = await self.client.select('tickets', conditions={
+                'guild_id': guild_id,
+                'creator_id': user_id
+            })
+            
+            tickets = []
+            for result in results:
+                # Try to load from JSON data blob first
+                ticket_data = result.get('data')
+                if ticket_data:
+                    if isinstance(ticket_data, str):
+                        import json
+                        try:
+                            ticket_data = json.loads(ticket_data)
+                        except json.JSONDecodeError:
+                            ticket_data = None
+                    
+                    if isinstance(ticket_data, dict) and 'ticket_id' in ticket_data:
+                        ticket = Ticket.from_dict(ticket_data)
+                        if ticket.is_open:
+                            tickets.append(ticket)
+                        continue
+                
+                # Fallback to columns
+                if 'ticket_id' in result:
+                    ticket = Ticket.from_dict({
+                        'ticket_id': result.get('ticket_id'),
+                        'guild_id': result.get('guild_id'),
+                        'channel_id': result.get('channel_id'),
+                        'creator_id': result.get('creator_id'),
+                        'category_id': result.get('category_id', 'general'),
+                        'status': result.get('status', 'open'),
+                        'priority': result.get('priority', 2),
+                        'created_at': result.get('created_at'),
+                        'closed_at': result.get('closed_at'),
+                        'claimed_by': result.get('claimed_by'),
+                    })
+                    if ticket.is_open:
+                        tickets.append(ticket)
+            
+            return tickets
+        except Exception as e:
+            import logging
+            logging.getLogger('db_manager').error(f"Error reading open tickets for user {user_id} in {guild_id}: {e}")
+            return []
     
     async def save_ticket(self, ticket: Ticket):
         ticket.updated_at = datetime.now()
