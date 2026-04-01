@@ -143,13 +143,29 @@ class TicketMessage:
             message_id=data['message_id'],
             author_id=data['author_id'],
             content=data['content'],
-            timestamp=datetime.fromisoformat(data['timestamp']) if isinstance(data['timestamp'], str) else data['timestamp'],
+            timestamp=cls._parse_date(data['timestamp']),
             attachments=data.get('attachments', []),
             embeds=data.get('embeds', []),
             edited=data.get('edited', False),
             deleted=data.get('deleted', False),
             is_staff=data.get('is_staff', False)
         )
+    
+    @staticmethod
+    def _parse_date(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                pass
+        if isinstance(value, (int, float)):
+            # Handle both seconds and milliseconds
+            if value > 2000000000:  # Likely milliseconds
+                return datetime.fromtimestamp(value / 1000)
+            return datetime.fromtimestamp(value)
+        return datetime.now()
 
 
 @dataclass
@@ -240,11 +256,7 @@ class Ticket:
         
         for field_name in ['created_at', 'updated_at', 'closed_at', 'claimed_at', 'first_response_at']:
             if data.get(field_name):
-                value = data[field_name]
-                if isinstance(value, str):
-                    setattr(ticket, field_name, datetime.fromisoformat(value))
-                else:
-                    setattr(ticket, field_name, value)
+                setattr(ticket, field_name, TicketMessage._parse_date(data[field_name]))
         
         ticket.claimed_by = data.get('claimed_by')
         ticket.closed_by = data.get('closed_by')
