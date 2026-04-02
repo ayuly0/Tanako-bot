@@ -115,7 +115,16 @@ class DatabaseAPIServer:
     async def _create_additional_tables(self) -> None:
         db = self._get_active_db()
         if db is None:
-            raise RuntimeError("Database not initialized")
+        self.db = await DistributedColumnarDB(
+            data_dir=self.data_dir,
+            node_id=self.node_id,
+            host=self.host,
+            port=self.port,
+            cluster_enabled=False,
+            use_direct_flush=True
+        )
+        await self.db.initialize()
+        db = self.db
         
         guilds_columns = [
             Column('guild_id', DataType.INT64, primary_key=True, indexed=True),
