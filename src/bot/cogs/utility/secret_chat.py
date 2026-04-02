@@ -13,8 +13,9 @@ from src.utils.embed_builder import EmbedBuilder, EmbedColor
 
 
 class SecretChatCog(commands.Cog, name="SecretChat"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self._active_conversations: dict = {}
         self._auto_delete_keywords = ['already', 'xóa', 'delete', 'destroy']
     
@@ -34,7 +35,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
             if keyword in content_lower:
                 try:
                     await message.delete()
-                except:
+                except Exception:
                     pass
                 return
         
@@ -46,7 +47,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
     
     async def _relay_message(self, message: discord.Message, target_id: int):
         try:
-            sender_data = await self.bot.db.get_secret_user(message.author.id)
+            sender_data = await self.repos.utility.get_secret_user(message.author.id)
             if not sender_data:
                 await message.channel.send(
                     embed=EmbedBuilder.error(
@@ -62,7 +63,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
             if not target_user:
                 try:
                     target_user = await self.bot.fetch_user(target_id)
-                except:
+                except Exception:
                     await message.channel.send(
                         embed=EmbedBuilder.error("Error", "Could not find the user to send message to.")
                     )
@@ -73,7 +74,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
                     title="Secret Message",
                     description=message.content
                 )
-                .color(0x2F3136)
+                .color(discord.Color.from_rgb(47, 49, 54))
                 .field("From", f"**{sender_nickname}**", True)
                 .footer("Reply in this DM to respond. Type 'already' to delete messages.")
                 .build()
@@ -108,7 +109,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
                     title="Secret Chat System",
                     description="Send anonymous messages through the bot!"
                 )
-                .color(0x2F3136)
+                .color(discord.Color.from_rgb(47, 49, 54))
                 .field("Register", "`!secret register <nickname>` - Create your secret identity", False)
                 .field("Connect", "`!secret connect <nickname>` - Start chatting with someone", False)
                 .field("Disconnect", "`!secret disconnect` - End the current conversation", False)
@@ -127,7 +128,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
         else:
             try:
                 await ctx.message.delete()
-            except:
+            except Exception:
                 pass
         
         nickname = nickname.strip()
@@ -142,13 +143,13 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
                 embed=EmbedBuilder.error("Invalid Nickname", "Nickname can only contain letters, numbers, and underscores.")
             )
         
-        existing = await self.bot.db.get_secret_user_by_nickname(nickname)
+        existing = await self.repos.utility.get_secret_user_by_nickname(nickname)
         if existing and existing.get('user_id') != ctx.author.id:
             return await ctx.author.send(
                 embed=EmbedBuilder.error("Nickname Taken", "This nickname is already in use. Please choose another.")
             )
         
-        await self.bot.db.save_secret_user(ctx.author.id, nickname)
+        await self.repos.utility.save_secret_user(ctx.author.id, nickname)
         
         await ctx.author.send(
             embed=EmbedBuilder.success(
@@ -167,14 +168,14 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
         if not isinstance(ctx.channel, discord.DMChannel):
             try:
                 await ctx.message.delete()
-            except:
+            except Exception:
                 pass
             await ctx.author.send(
                 embed=EmbedBuilder.info("Use DMs", "Please use this command in DMs for privacy!")
             )
             return
         
-        sender_data = await self.bot.db.get_secret_user(ctx.author.id)
+        sender_data = await self.repos.utility.get_secret_user(ctx.author.id)
         if not sender_data:
             return await ctx.send(
                 embed=EmbedBuilder.error(
@@ -183,7 +184,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
                 )
             )
         
-        target_data = await self.bot.db.get_secret_user_by_nickname(target_nickname)
+        target_data = await self.repos.utility.get_secret_user_by_nickname(target_nickname)
         if not target_data:
             return await ctx.send(
                 embed=EmbedBuilder.error(
@@ -228,10 +229,10 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
         if not isinstance(ctx.channel, discord.DMChannel):
             try:
                 await ctx.message.delete()
-            except:
+            except Exception:
                 pass
         
-        user_data = await self.bot.db.get_secret_user(ctx.author.id)
+        user_data = await self.repos.utility.get_secret_user(ctx.author.id)
         
         if not user_data:
             return await ctx.author.send(
@@ -244,7 +245,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
         connected_to = "No one"
         if ctx.author.id in self._active_conversations:
             target_id = self._active_conversations[ctx.author.id]
-            target_data = await self.bot.db.get_secret_user(target_id)
+            target_data = await self.repos.utility.get_secret_user(target_id)
             if target_data:
                 connected_to = target_data.get('nickname', 'Unknown')
         
@@ -252,7 +253,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
             EmbedBuilder(
                 title="Your Secret Profile"
             )
-            .color(0x2F3136)
+            .color(discord.Color.from_rgb(47, 49, 54))
             .field("Nickname", user_data.get('nickname', 'Unknown'), True)
             .field("Connected To", connected_to, True)
             .field("Status", "Active" if user_data.get('is_active', True) else "Inactive", True)
@@ -267,7 +268,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
     
     @secret.command(name="delete", description="Delete your secret account")
     async def delete_account(self, ctx: commands.Context):
-        user_data = await self.bot.db.get_secret_user(ctx.author.id)
+        user_data = await self.repos.utility.get_secret_user(ctx.author.id)
         
         if not user_data:
             return await ctx.send(
@@ -277,7 +278,7 @@ class SecretChatCog(commands.Cog, name="SecretChat"):
         if ctx.author.id in self._active_conversations:
             del self._active_conversations[ctx.author.id]
         
-        await self.bot.db.delete_secret_user(ctx.author.id)
+        await self.repos.utility.delete_secret_user(ctx.author.id)
         
         await ctx.author.send(
             embed=EmbedBuilder.success(

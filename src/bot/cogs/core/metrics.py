@@ -15,8 +15,9 @@ from src.utils.embed_builder import EmbedBuilder, EmbedColor
 
 
 class MetricsCog(commands.Cog, name="Metrics"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self._message_count: int = 0
         self._command_count: int = 0
         self._metrics_task_started = False
@@ -48,42 +49,42 @@ class MetricsCog(commands.Cog, name="Metrics"):
             
             shard_id = self.bot.shard_id if self.bot.shard_id is not None else 0
             
-            await self.bot.db.save_metric(
+            await self.repos.utility.save_metric(
                 shard_id=shard_id,
                 metric_type='messages',
                 value=float(self._message_count),
                 data={'period': '5m'}
             )
             
-            await self.bot.db.save_metric(
+            await self.repos.utility.save_metric(
                 shard_id=shard_id,
                 metric_type='commands',
                 value=float(self._command_count),
                 data={'period': '5m'}
             )
             
-            await self.bot.db.save_metric(
+            await self.repos.utility.save_metric(
                 shard_id=shard_id,
                 metric_type='memory',
                 value=memory_mb,
                 data={'unit': 'MB'}
             )
             
-            await self.bot.db.save_metric(
+            await self.repos.utility.save_metric(
                 shard_id=shard_id,
                 metric_type='cpu',
                 value=cpu_percent,
                 data={'unit': '%'}
             )
             
-            await self.bot.db.save_metric(
+            await self.repos.utility.save_metric(
                 shard_id=shard_id,
                 metric_type='guilds',
                 value=float(len(self.bot.guilds)),
                 data={}
             )
             
-            await self.bot.db.save_metric(
+            await self.repos.utility.save_metric(
                 shard_id=shard_id,
                 metric_type='latency',
                 value=self.bot.latency * 1000 if self.bot.latency else 0,
@@ -93,7 +94,7 @@ class MetricsCog(commands.Cog, name="Metrics"):
             self._message_count = 0
             self._command_count = 0
             
-        except Exception as e:
+        except Exception:
             pass
     
     @collect_metrics_loop.before_loop
@@ -107,6 +108,7 @@ class MetricsCog(commands.Cog, name="Metrics"):
         memory_mb = memory.rss / 1024 / 1024
         cpu_percent = process.cpu_percent()
         
+        # Access start_time properly from bot instance
         uptime = datetime.now() - self.bot.start_time
         days = uptime.days
         hours, remainder = divmod(uptime.seconds, 3600)
@@ -206,21 +208,16 @@ class MetricsCog(commands.Cog, name="Metrics"):
                 description=guild.description or "No description set"
             )
             .color(EmbedColor.INFO)
+            .thumbnail(guild.icon.url if guild.icon else None)
+            .field("Owner", guild.owner.mention if guild.owner else "Unknown", True)
+            .field("Created", f"<t:{int(guild.created_at.timestamp())}:R>", True)
+            .field("ID", str(guild.id), True)
+            .field("Members", f"Total: {guild.member_count}\nHumans: {humans}\nBots: {bots}\nOnline: {online}", True)
+            .field("Channels", f"Text: {text_channels}\nVoice: {voice_channels}\nCategories: {categories}", True)
+            .field("Other", f"Roles: {roles}\nEmojis: {emojis}\nStickers: {stickers}", True)
+            .field("Boost", f"Level {boost_level}\n{boost_count} boosts", True)
+            .field("Verification", verification_levels.get(guild.verification_level, "Unknown"), True)
         )
-        
-        if guild.icon:
-            embed.thumbnail(guild.icon.url)
-        
-        embed.field("Owner", guild.owner.mention if guild.owner else "Unknown", True)
-        embed.field("Created", f"<t:{int(guild.created_at.timestamp())}:R>", True)
-        embed.field("ID", str(guild.id), True)
-        
-        embed.field("Members", f"Total: {guild.member_count}\nHumans: {humans}\nBots: {bots}\nOnline: {online}", True)
-        embed.field("Channels", f"Text: {text_channels}\nVoice: {voice_channels}\nCategories: {categories}", True)
-        embed.field("Other", f"Roles: {roles}\nEmojis: {emojis}\nStickers: {stickers}", True)
-        
-        embed.field("Boost", f"Level {boost_level}\n{boost_count} boosts", True)
-        embed.field("Verification", verification_levels.get(guild.verification_level, "Unknown"), True)
         
         if guild.banner:
             embed.image(guild.banner.url)
@@ -268,7 +265,7 @@ class MetricsCog(commands.Cog, name="Metrics"):
     async def view_metrics(self, ctx: commands.Context, limit: int = 10):
         shard_id = self.bot.shard_id if self.bot.shard_id is not None else 0
         
-        metrics = await self.bot.db.get_metrics(shard_id=shard_id, limit=limit * 6)
+        metrics = await self.repos.utility.get_metrics(shard_id=shard_id, limit=limit * 6)
         
         if not metrics:
             return await ctx.send(

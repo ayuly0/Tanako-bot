@@ -15,18 +15,17 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-from src.database.manager import DatabaseManager
+from src.core.config import config
+from src.database.repositories.registry import RepositoryRegistry
 from src.bot.cogs.utility import WelcomeCog, TicketsCog, LevelingCog, SecretChatCog, HostCheckCog, UtilityCog
 from src.bot.cogs.moderation import ModerationCog, AntiNukeCog, AntiRaidCog
 from src.bot.cogs.security import FilterCog, AutoModCog
 from src.bot.cogs.core import AdminCog, MetricsCog, LoggingCog
 
-load_dotenv()
-
 os.makedirs('data/logs', exist_ok=True)
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO if not config.bot.debug else logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -49,17 +48,17 @@ class SecurityBot(commands.AutoShardedBot):
             shard_ids=shard_ids
         )
         
-        self.db: DatabaseManager = DatabaseManager()
+        self.registry: RepositoryRegistry = RepositoryRegistry(config.db.uri)
         self.start_time: datetime = datetime.now()
-        self.version: str = "2.0.0"
+        self.version: str = config.bot.version
         self._metrics_task: Optional[asyncio.Task] = None
-    
+
     async def setup_hook(self):
-        logger.info("Initializing database connection...")
-        await self.db.initialize()
+        logger.info("Initializing database repositories...")
+        await self.registry.initialize()
         logger.info("Database connection established")
         
-        logger.info("Loading cogs...")
+        logger.info("Loading cogs with dependency injection...")
         cogs = [
             WelcomeCog(self),
             ModerationCog(self),
@@ -117,22 +116,6 @@ class SecurityBot(commands.AutoShardedBot):
         
         self._start_heartbeat()
     
-    async def on_shard_ready(self, shard_id: int):
-        logger.info(f"Shard {shard_id} is ready")
-        await self._report_shard_status(shard_id, "ready")
-    
-    async def on_shard_connect(self, shard_id: int):
-        logger.info(f"Shard {shard_id} connected")
-        await self._report_shard_status(shard_id, "connected")
-    
-    async def on_shard_disconnect(self, shard_id: int):
-        logger.warning(f"Shard {shard_id} disconnected")
-        await self._report_shard_status(shard_id, "disconnected")
-    
-    async def on_shard_resumed(self, shard_id: int):
-        logger.info(f"Shard {shard_id} resumed")
-        await self._report_shard_status(shard_id, "resumed")
-    
     async def _report_shard_status(self, shard_id: int, status: str):
         try:
             process = psutil.Process()
@@ -150,17 +133,18 @@ class SecurityBot(commands.AutoShardedBot):
                 shard = self.shards[shard_id]
                 latency = shard.latency * 1000 if shard.latency else 0.0
             
-            await self.db.save_node_status(
-                shard_id=shard_id,
-                status=status,
-                latency=latency,
-                guild_count=guild_count,
-                member_count=member_count,
-                uptime_seconds=int(uptime),
-                memory_mb=memory_mb,
-                cpu_percent=cpu_percent,
-                version=self.version
-            )
+            await self.registry.metrics.save_node_status({
+                'shard_id': shard_id,
+                'status': status,
+                'latency': latency,
+                'guild_count': guild_count,
+                'member_count': member_count,
+                'uptime_seconds': int(uptime),
+                'memory_mb': memory_mb,
+                'cpu_percent': cpu_percent,
+                'version': self.version,
+                'last_heartbeat': int(datetime.now().timestamp() * 1000)
+            })
         except Exception as e:
             logger.error(f"Failed to report shard status: {e}")
     
@@ -179,88 +163,36 @@ class SecurityBot(commands.AutoShardedBot):
     
     async def on_guild_join(self, guild: discord.Guild):
         logger.info(f"Joined guild: {guild.name} (ID: {guild.id})")
-        await self.db.get_or_create_guild_config(guild.id)
-    
-    async def on_guild_remove(self, guild: discord.Guild):
-        logger.info(f"Left guild: {guild.name} (ID: {guild.id})")
-    
-    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        if isinstance(error, commands.CommandNotFound):
-            return
-        
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You don't have permission to use this command.", delete_after=10)
-            return
-        
-        if isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("I don't have the required permissions to execute this command.", delete_after=10)
-            return
-        
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing required argument: `{error.param.name}`", delete_after=10)
-            return
-        
-        if isinstance(error, commands.BadArgument):
-            await ctx.send(f"Invalid argument provided.", delete_after=10)
-            return
-        
-        if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(f"Command on cooldown. Try again in {error.retry_after:.1f}s", delete_after=5)
-            return
-        
-        logger.error(f"Command error in {ctx.command}: {error}", exc_info=error)
+        await self.registry.guilds.get_config(guild.id)
     
     async def close(self):
         logger.info("Shutting down bot...")
-        await self.db.close()
+        await self.registry.close()
         await super().close()
 
 
 async def main():
     os.makedirs('data/logs', exist_ok=True)
     os.makedirs('data/db', exist_ok=True)
-    os.makedirs('data/backups', exist_ok=True)
-    os.makedirs('data/guilds', exist_ok=True)
     
-    token = os.getenv('DISCORD_TOKEN')
-    
-    if not token:
-        logger.error("DISCORD_TOKEN not found in environment variables!")
-        logger.error("Please set your Discord bot token in the Secrets tab.")
+    token = config.bot.token
+    if not token or token == "...":
+        logger.error("DISCORD_TOKEN not found in environment!")
         sys.exit(1)
     
-    shard_count = os.getenv('SHARD_COUNT')
-    shard_ids_str = os.getenv('SHARD_IDS')
-    
-    shard_count_int = int(shard_count) if shard_count else None
-    shard_ids = None
-    if shard_ids_str:
-        shard_ids = [int(x.strip()) for x in shard_ids_str.split(',')]
-    
-    if shard_count_int:
-        logger.info(f"Starting bot with {shard_count_int} shards")
-        if shard_ids:
-            logger.info(f"Running shards: {shard_ids}")
-    else:
-        logger.info("Starting bot with automatic sharding")
-    
-    bot = SecurityBot(shard_count=shard_count_int, shard_ids=shard_ids)
+    bot = SecurityBot(
+        shard_count=config.bot.shard_count, 
+        shard_ids=[int(i) for i in config.bot.shard_ids.split(",")] if config.bot.shard_ids else None
+    )
     
     try:
-        logger.info("Starting bot...")
         await bot.start(token)
-    except discord.LoginFailure:
-        logger.error("Invalid Discord token! Please check your DISCORD_TOKEN.")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
     finally:
         if not bot.is_closed():
             await bot.close()
-
 
 if __name__ == '__main__':
     asyncio.run(main())

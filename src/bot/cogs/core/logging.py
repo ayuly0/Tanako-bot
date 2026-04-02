@@ -14,19 +14,37 @@ from src.models.logs import LogType, LogEntry, LogConfig
 
 
 class LoggingCog(commands.Cog, name="Logging"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self._message_cache = {}
     
     async def _get_log_channel(self, guild_id: int, log_type: LogType) -> Optional[discord.TextChannel]:
-        log_config = await self.bot.db.get_log_config(guild_id)
-        if not log_config or not log_config.enabled:
+        guild_config = await self.repos.guilds.get_config(guild_id)
+        if not guild_config:
+            return None
+            
+        settings = guild_config.settings.logging
+        if not settings.enabled:
             return None
         
-        if not log_config.is_type_enabled(log_type):
+        # Check if this specific type is enabled
+        type_field = f"log_{log_type.value}"
+        if hasattr(settings, type_field) and not getattr(settings, type_field):
             return None
+            
+        # Map LogType to channel ID from settings
+        category_map = {
+            'message': settings.message_log_channel,
+            'member': settings.member_log_channel,
+            'moderation': settings.moderation_log_channel,
+            'role': settings.server_log_channel,
+            'channel': settings.server_log_channel,
+            'guild': settings.server_log_channel,
+            'voice': settings.voice_log_channel
+        }
         
-        channel_id = log_config.get_channel_for_type(log_type)
+        channel_id = category_map.get(log_type.category)
         if not channel_id:
             return None
         
@@ -48,9 +66,10 @@ class LoggingCog(commands.Cog, name="Logging"):
             'attachments': [a.url for a in message.attachments]
         }
         
+        # Keep cache manageable
         if len(self._message_cache) > 10000:
-            oldest = list(self._message_cache.keys())[:1000]
-            for key in oldest:
+            keys = list(self._message_cache.keys())
+            for key in keys[:1000]:
                 del self._message_cache[key]
     
     @commands.Cog.listener()
@@ -189,7 +208,7 @@ class LoggingCog(commands.Cog, name="Logging"):
                     reason = entry.reason or "No reason provided"
                     moderator = entry.user
                     break
-        except:
+        except Exception:
             pass
         
         embed = (
@@ -365,7 +384,11 @@ class LoggingCog(commands.Cog, name="Logging"):
     @commands.has_permissions(manage_guild=True)
     async def logs(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
-            log_config = await self.bot.db.get_log_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+            if not guild_config:
+                return await ctx.send("No configuration found.")
+                
+            settings = guild_config.settings.logging
             
             embed = (
                 EmbedBuilder(
@@ -373,45 +396,52 @@ class LoggingCog(commands.Cog, name="Logging"):
                     description="Server logging settings"
                 )
                 .color(EmbedColor.LOGGING)
-                .field("Status", "✅ Enabled" if (log_config and log_config.enabled) else "❌ Disabled", True)
+                .field("Status", "✅ Enabled" if settings.enabled else "❌ Disabled", True)
             )
             
-            if log_config:
-                channels = [
-                    ("Message Logs", log_config.message_log_channel),
-                    ("Member Logs", log_config.member_log_channel),
-                    ("Moderation Logs", log_config.moderation_log_channel),
-                    ("Server Logs", log_config.server_log_channel),
-                    ("Voice Logs", log_config.voice_log_channel),
-                ]
-                
-                for name, channel_id in channels:
-                    embed.field(name, f"<#{channel_id}>" if channel_id else "Not set", True)
+            channels = [
+                ("Message Logs", settings.message_log_channel),
+                ("Member Logs", settings.member_log_channel),
+                ("Moderation Logs", settings.moderation_log_channel),
+                ("Server Logs", settings.server_log_channel),
+                ("Voice Logs", settings.voice_log_channel),
+            ]
+            
+            for name, channel_id in channels:
+                embed.field(name, f"<#{channel_id}>" if channel_id else "Not set", True)
             
             await ctx.send(embed=embed.build())
     
     @logs.command(name="enable", description="Enable logging")
     @commands.has_permissions(manage_guild=True)
     async def logs_enable(self, ctx: commands.Context):
-        log_config = await self.bot.db.get_or_create_log_config(ctx.guild.id)
-        log_config.enabled = True
-        await self.bot.db.save_log_config(log_config)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
+        guild_config.settings.logging.enabled = True
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Logging", "Logging has been enabled."))
     
     @logs.command(name="disable", description="Disable logging")
     @commands.has_permissions(manage_guild=True)
     async def logs_disable(self, ctx: commands.Context):
-        log_config = await self.bot.db.get_or_create_log_config(ctx.guild.id)
-        log_config.enabled = False
-        await self.bot.db.save_log_config(log_config)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
+        guild_config.settings.logging.enabled = False
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Logging", "Logging has been disabled."))
     
     @logs.command(name="channel", description="Set a log channel")
     @commands.has_permissions(manage_guild=True)
     async def logs_channel(self, ctx: commands.Context, category: str, channel: discord.TextChannel):
-        valid_categories = ['message', 'member', 'moderation', 'server', 'voice', 'automod', 'ticket', 'bot']
+        valid_categories = ['message', 'member', 'moderation', 'server', 'voice']
         
         if category.lower() not in valid_categories:
             return await ctx.send(embed=EmbedBuilder.error(
@@ -419,9 +449,21 @@ class LoggingCog(commands.Cog, name="Logging"):
                 f"Valid categories: {', '.join(valid_categories)}"
             ))
         
-        log_config = await self.bot.db.get_or_create_log_config(ctx.guild.id)
-        log_config.set_channel(category.lower(), channel.id)
-        await self.bot.db.save_log_config(log_config)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
+        attr_map = {
+            'message': 'message_log_channel',
+            'member': 'member_log_channel',
+            'moderation': 'moderation_log_channel',
+            'server': 'server_log_channel',
+            'voice': 'voice_log_channel'
+        }
+        
+        setattr(guild_config.settings.logging, attr_map[category.lower()], channel.id)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success(
             "Log Channel Set",
@@ -431,33 +473,38 @@ class LoggingCog(commands.Cog, name="Logging"):
     @logs.command(name="ignore", description="Ignore a channel or role from logging")
     @commands.has_permissions(manage_guild=True)
     async def logs_ignore(self, ctx: commands.Context, action: str, target_type: str, target: str):
-        log_config = await self.bot.db.get_or_create_log_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
+        settings = guild_config.settings.logging
         
         if target_type.lower() == "channel":
             try:
                 channel = await commands.TextChannelConverter().convert(ctx, target)
-                target_list = log_config.ignored_channels
+                target_list = settings.ignored_channels
                 target_id = channel.id
                 target_name = channel.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "Channel not found."))
         
         elif target_type.lower() == "role":
             try:
                 role = await commands.RoleConverter().convert(ctx, target)
-                target_list = log_config.ignored_roles
+                target_list = settings.ignored_roles
                 target_id = role.id
                 target_name = role.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "Role not found."))
         
         elif target_type.lower() == "user":
             try:
                 user = await commands.MemberConverter().convert(ctx, target)
-                target_list = log_config.ignored_users
+                target_list = settings.ignored_users
                 target_id = user.id
                 target_name = user.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "User not found."))
         
         else:
@@ -466,7 +513,7 @@ class LoggingCog(commands.Cog, name="Logging"):
         if action.lower() == "add":
             if target_id not in target_list:
                 target_list.append(target_id)
-                await self.bot.db.save_log_config(log_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Ignored", f"{target_name} will be ignored in logs."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Ignored", "This target is already ignored."))
@@ -474,7 +521,7 @@ class LoggingCog(commands.Cog, name="Logging"):
         elif action.lower() == "remove":
             if target_id in target_list:
                 target_list.remove(target_id)
-                await self.bot.db.save_log_config(log_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Removed", f"{target_name} will no longer be ignored."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Ignored", "This target is not in the ignore list."))

@@ -57,8 +57,9 @@ class ActionTracker:
 
 
 class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self.tracker = ActionTracker()
         self.cleanup_tracker.start()
     
@@ -76,7 +77,7 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
         action_type: str,
         threshold_attr: str
     ) -> bool:
-        guild_config = await self.bot.db.get_guild_config(guild.id)
+        guild_config = await self.repos.guilds.get_config(guild.id)
         if not guild_config:
             return False
         
@@ -113,24 +114,24 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
         if action == "ban":
             try:
                 await member.ban(reason=reason)
-            except:
+            except Exception:
                 pass
         elif action == "kick":
             try:
                 await member.kick(reason=reason)
-            except:
+            except Exception:
                 pass
         elif action == "strip_roles":
             try:
                 roles_to_remove = [r for r in member.roles if r != guild.default_role and r < guild.me.top_role]
                 if roles_to_remove:
                     await member.remove_roles(*roles_to_remove, reason=reason)
-            except:
+            except Exception:
                 pass
         elif action == "timeout":
             try:
                 await member.timeout(timedelta(hours=24), reason=reason)
-            except:
+            except Exception:
                 pass
     
     async def _send_alert(
@@ -167,7 +168,7 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
         
         try:
             await channel.send(embed=embed)
-        except:
+        except Exception:
             pass
     
     @commands.Cog.listener()
@@ -232,9 +233,10 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
     @commands.has_permissions(administrator=True)
     async def antinuke(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             if not guild_config:
-                return await ctx.send("No configuration found.")
+                from src.models.guild import GuildConfig
+                guild_config = GuildConfig(guild_id=ctx.guild.id)
             
             settings = guild_config.settings.anti_nuke
             
@@ -254,23 +256,31 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
                 .build()
             )
             
-            await ctx.send(embed=embed)
+            await ctx.send(embed=embed.build())
     
     @antinuke.command(name="enable", description="Enable anti-nuke protection")
     @commands.has_permissions(administrator=True)
     async def antinuke_enable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_nuke.enabled = True
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Anti-Nuke", "Anti-nuke protection has been enabled."))
     
     @antinuke.command(name="disable", description="Disable anti-nuke protection")
     @commands.has_permissions(administrator=True)
     async def antinuke_disable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_nuke.enabled = False
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Anti-Nuke", "Anti-nuke protection has been disabled."))
     
@@ -284,21 +294,28 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
                 f"Valid actions: {', '.join(valid_actions)}"
             ))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_nuke.action = action.lower()
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Action Updated", f"Anti-nuke action set to: {action}"))
     
     @antinuke.command(name="trust", description="Add or remove a trusted user")
     @commands.has_permissions(administrator=True)
     async def antinuke_trust(self, ctx: commands.Context, action: str, user: discord.Member):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         
         if action.lower() == "add":
             if user.id not in guild_config.settings.anti_nuke.trusted_users:
                 guild_config.settings.anti_nuke.trusted_users.append(user.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Trusted User", f"{user.mention} is now a trusted user."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Trusted", "This user is already trusted."))
@@ -306,7 +323,7 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
         elif action.lower() == "remove":
             if user.id in guild_config.settings.anti_nuke.trusted_users:
                 guild_config.settings.anti_nuke.trusted_users.remove(user.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Trusted User", f"{user.mention} is no longer a trusted user."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Trusted", "This user is not in the trusted list."))
@@ -317,9 +334,13 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
     @antinuke.command(name="alertchannel", description="Set the alert channel for nuke notifications")
     @commands.has_permissions(administrator=True)
     async def antinuke_alertchannel(self, ctx: commands.Context, channel: discord.TextChannel):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_nuke.alert_channel = channel.id
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Alert Channel", f"Nuke alerts will be sent to {channel.mention}"))
     
@@ -345,9 +366,13 @@ class AntiNukeCog(commands.Cog, name="Anti-Nuke"):
         if limit < 1 or limit > 50:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Limit must be between 1 and 50."))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         setattr(guild_config.settings.anti_nuke, valid_types[action_type.lower()], limit)
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Threshold Updated", f"{action_type} threshold set to {limit} per minute."))
 

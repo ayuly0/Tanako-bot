@@ -15,8 +15,9 @@ from src.utils.helpers import format_timestamp
 
 
 class UtilityCog(commands.Cog, name="Utility"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
     
     @commands.hybrid_command(name="avatar", description="Get a user's avatar")
     async def avatar(self, ctx: commands.Context, user: Optional[discord.Member] = None):
@@ -26,7 +27,7 @@ class UtilityCog(commands.Cog, name="Utility"):
             EmbedBuilder(
                 title=f"🖼️ {user.display_name}'s Avatar"
             )
-            .color(user.color if user.color.value else EmbedColor.INFO.value)
+            .color(user.color if user.color.value else discord.Color.blue())
             .image(user.display_avatar.url)
             .field("Links", f"[PNG]({user.display_avatar.with_format('png')}) | [JPG]({user.display_avatar.with_format('jpg')}) | [WEBP]({user.display_avatar.with_format('webp')})", False)
             .build()
@@ -72,9 +73,12 @@ class UtilityCog(commands.Cog, name="Utility"):
     
     @commands.hybrid_command(name="afk", description="Set yourself as AFK")
     async def afk(self, ctx: commands.Context, *, reason: str = "AFK"):
-        user_data = await self.bot.db.get_or_create_user_data(ctx.author.id, ctx.guild.id)
+        user_data = await self.repos.users.get_user_data(ctx.author.id, ctx.guild.id)
+        if not user_data:
+            user_data = UserData(user_id=ctx.author.id, guild_id=ctx.guild.id)
+            
         user_data.set_afk(reason)
-        await self.bot.db.save_user_data(user_data)
+        await self.repos.users.save_user_data(user_data)
         
         await ctx.send(embed=EmbedBuilder.success("AFK Set", f"You are now AFK: {reason}"))
     
@@ -83,31 +87,31 @@ class UtilityCog(commands.Cog, name="Utility"):
         if not message.guild or message.author.bot:
             return
         
-        user_data = await self.bot.db.get_user_data(message.author.id, message.guild.id)
+        user_data = await self.repos.users.get_user_data(message.author.id, message.guild.id)
         if user_data and user_data.afk:
             user_data.clear_afk()
-            await self.bot.db.save_user_data(user_data)
+            await self.repos.users.save_user_data(user_data)
             
             try:
                 await message.channel.send(
                     f"Welcome back, {message.author.mention}! I've removed your AFK status.",
                     delete_after=5
                 )
-            except:
+            except Exception:
                 pass
         
         for user in message.mentions:
             if user.bot:
                 continue
             
-            afk_user_data = await self.bot.db.get_user_data(user.id, message.guild.id)
+            afk_user_data = await self.repos.users.get_user_data(user.id, message.guild.id)
             if afk_user_data and afk_user_data.afk:
                 try:
                     await message.channel.send(
                         f"{user.display_name} is AFK: {afk_user_data.afk_message} (since <t:{int(afk_user_data.afk_since.timestamp())}:R>)",
                         delete_after=10
                     )
-                except:
+                except Exception:
                     pass
     
     @commands.hybrid_command(name="remind", description="Set a reminder")

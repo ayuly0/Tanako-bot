@@ -15,8 +15,9 @@ from src.utils.embed_builder import EmbedBuilder, EmbedColor
 
 
 class AntiRaidCog(commands.Cog, name="Anti-Raid"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self.join_cache: Dict[int, List[datetime]] = defaultdict(list)
         self.lockdown_guilds: Dict[int, datetime] = {}
         self.cleanup_cache.start()
@@ -49,7 +50,7 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
         if not guild:
             return
         
-        guild_config = await self.bot.db.get_guild_config(guild_id)
+        guild_config = await self.repos.guilds.get_config(guild_id)
         if guild_config and guild_config.settings.anti_raid.alert_channel:
             channel = guild.get_channel(guild_config.settings.anti_raid.alert_channel)
             if channel:
@@ -63,11 +64,11 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
                 )
                 try:
                     await channel.send(embed=embed)
-                except:
+                except Exception:
                     pass
     
     async def _trigger_lockdown(self, guild: discord.Guild, reason: str, affected: int):
-        guild_config = await self.bot.db.get_guild_config(guild.id)
+        guild_config = await self.repos.guilds.get_config(guild.id)
         if not guild_config:
             return
         
@@ -87,7 +88,7 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
                 )
                 try:
                     await channel.send(embed=embed)
-                except:
+                except Exception:
                     pass
     
     @commands.Cog.listener()
@@ -95,7 +96,7 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
         if member.bot:
             return
         
-        guild_config = await self.bot.db.get_guild_config(member.guild.id)
+        guild_config = await self.repos.guilds.get_config(member.guild.id)
         if not guild_config:
             return
         
@@ -106,7 +107,7 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
         if member.guild.id in self.lockdown_guilds:
             try:
                 await member.kick(reason="Anti-Raid: Server is in lockdown mode")
-            except:
+            except Exception:
                 pass
             return
         
@@ -137,7 +138,7 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
             if settings.auto_ban_new_accounts:
                 try:
                     await member.ban(reason=f"Anti-Raid: Account too new ({account_age} days old)")
-                except:
+                except Exception:
                     pass
             elif settings.alert_channel:
                 channel = member.guild.get_channel(settings.alert_channel)
@@ -155,22 +156,23 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
                     )
                     try:
                         await channel.send(embed=embed)
-                    except:
+                    except Exception:
                         pass
         
         if settings.auto_kick_no_avatar and member.default_avatar == member.display_avatar:
             try:
                 await member.kick(reason="Anti-Raid: No avatar (default avatar)")
-            except:
+            except Exception:
                 pass
     
     @commands.hybrid_group(name="antiraid", description="Anti-raid configuration")
     @commands.has_permissions(administrator=True)
     async def antiraid(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             if not guild_config:
-                return await ctx.send("No configuration found.")
+                from src.models.guild import GuildConfig
+                guild_config = GuildConfig(guild_id=ctx.guild.id)
             
             settings = guild_config.settings.anti_raid
             
@@ -188,33 +190,40 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
                 .field("New Account Threshold", f"{settings.new_account_threshold} days", True)
                 .field("Auto-ban New Accounts", "✅" if settings.auto_ban_new_accounts else "❌", True)
                 .field("Auto-kick No Avatar", "✅" if settings.auto_kick_no_avatar else "❌", True)
-                .build()
             )
             
             if ctx.guild.id in self.lockdown_guilds:
-                embed.add_field(
-                    name="⚠️ LOCKDOWN ACTIVE",
-                    value=f"Ends <t:{int(self.lockdown_guilds[ctx.guild.id].timestamp())}:R>",
-                    inline=False
+                embed.field(
+                    "⚠️ LOCKDOWN ACTIVE",
+                    f"Ends <t:{int(self.lockdown_guilds[ctx.guild.id].timestamp())}:R>",
+                    False
                 )
             
-            await ctx.send(embed=embed)
+            await ctx.send(embed=embed.build())
     
     @antiraid.command(name="enable", description="Enable anti-raid protection")
     @commands.has_permissions(administrator=True)
     async def antiraid_enable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_raid.enabled = True
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Anti-Raid", "Anti-raid protection has been enabled."))
     
     @antiraid.command(name="disable", description="Disable anti-raid protection")
     @commands.has_permissions(administrator=True)
     async def antiraid_disable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_raid.enabled = False
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Anti-Raid", "Anti-raid protection has been disabled."))
     
@@ -226,10 +235,14 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
         if seconds < 5 or seconds > 60:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Interval must be between 5 and 60 seconds."))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_raid.join_threshold = joins
         guild_config.settings.anti_raid.join_interval = seconds
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success(
             "Threshold Updated",
@@ -239,9 +252,13 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
     @antiraid.command(name="alertchannel", description="Set the alert channel for raid notifications")
     @commands.has_permissions(administrator=True)
     async def antiraid_alertchannel(self, ctx: commands.Context, channel: discord.TextChannel):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_raid.alert_channel = channel.id
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Alert Channel", f"Raid alerts will be sent to {channel.mention}"))
     
@@ -252,7 +269,7 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
             if ctx.guild.id in self.lockdown_guilds:
                 return await ctx.send(embed=EmbedBuilder.warning("Already Active", "Lockdown is already active."))
             
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             duration = guild_config.settings.anti_raid.lockdown_duration if guild_config else 300
             
             self.lockdown_guilds[ctx.guild.id] = datetime.now() + timedelta(seconds=duration)
@@ -279,9 +296,13 @@ class AntiRaidCog(commands.Cog, name="Anti-Raid"):
         if days < 0 or days > 365:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Days must be between 0 and 365."))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.anti_raid.new_account_threshold = days
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success(
             "Threshold Updated",

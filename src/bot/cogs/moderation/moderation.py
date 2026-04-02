@@ -17,8 +17,9 @@ from src.models.moderation import ModerationCase, ModerationAction, Warning
 
 
 class ModerationCog(commands.Cog, name="Moderation"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
     
     async def _create_case(
         self,
@@ -30,7 +31,11 @@ class ModerationCog(commands.Cog, name="Moderation"):
         duration_seconds: Optional[int] = None,
         auto_mod: bool = False
     ) -> ModerationCase:
-        guild_config = await self.bot.db.get_or_create_guild_config(guild_id)
+        guild_config = await self.repos.guilds.get_config(guild_id)
+        if not guild_config:
+             from src.models.guild import GuildConfig
+             guild_config = GuildConfig(guild_id=guild_id)
+        
         case_id = guild_config.get_next_case_id()
         
         expires_at = None
@@ -49,8 +54,8 @@ class ModerationCog(commands.Cog, name="Moderation"):
             auto_mod=auto_mod
         )
         
-        await self.bot.db.save_moderation_case(case)
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.moderation.save_case(case)
+        await self.repos.guilds.save_config(guild_config)
         
         return case
     
@@ -91,7 +96,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         moderator: discord.Member,
         target: Union[discord.Member, discord.User]
     ):
-        guild_config = await self.bot.db.get_guild_config(guild.id)
+        guild_config = await self.repos.guilds.get_config(guild.id)
         if not guild_config:
             return
         
@@ -120,7 +125,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
             msg = await channel.send(embed=embed)
             case.message_id = msg.id
             case.channel_id = channel.id
-            await self.bot.db.save_moderation_case(case)
+            await self.repos.moderation.save_case(case)
         except discord.Forbidden:
             pass
     
@@ -157,13 +162,17 @@ class ModerationCog(commands.Cog, name="Moderation"):
         dm_sent = await self._dm_user(member, ctx.guild, ModerationAction.WARN, reason, case_id=case.case_id)
         case.dm_sent = dm_sent
         case.dm_failed = not dm_sent
-        await self.bot.db.save_moderation_case(case)
+        await self.repos.moderation.save_case(case)
         
         await self._log_moderation(ctx.guild, case, ctx.author, member)
         
-        user_data = await self.bot.db.get_or_create_user_data(member.id, ctx.guild.id)
+        user_data = await self.repos.users.get_user_data(member.id, ctx.guild.id)
+        if not user_data:
+            from src.models.user import UserData
+            user_data = UserData(user_id=member.id, guild_id=ctx.guild.id)
+            
         user_data.add_warning()
-        await self.bot.db.save_user_data(user_data)
+        await self.repos.users.save_user_data(user_data)
         
         embed = (
             EmbedBuilder(
@@ -223,7 +232,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         except discord.Forbidden:
             return await ctx.send(embed=EmbedBuilder.error("Error", "I don't have permission to kick this member."))
         
-        await self.bot.db.save_moderation_case(case)
+        await self.repos.moderation.save_case(case)
         await self._log_moderation(ctx.guild, case, ctx.author, member)
         
         embed = (
@@ -290,7 +299,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         except discord.NotFound:
             return await ctx.send(embed=EmbedBuilder.error("Error", "User not found."))
         
-        await self.bot.db.save_moderation_case(case)
+        await self.repos.moderation.save_case(case)
         await self._log_moderation(ctx.guild, case, ctx.author, user)
         
         embed = (
@@ -420,7 +429,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         except discord.Forbidden:
             return await ctx.send(embed=EmbedBuilder.error("Error", "I don't have permission to timeout this member."))
         
-        await self.bot.db.save_moderation_case(case)
+        await self.repos.moderation.save_case(case)
         await self._log_moderation(ctx.guild, case, ctx.author, member)
         
         embed = (
@@ -527,7 +536,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         except discord.Forbidden:
             return await ctx.send(embed=EmbedBuilder.error("Error", "I don't have permission to softban this member."))
         
-        await self.bot.db.save_moderation_case(case)
+        await self.repos.moderation.save_case(case)
         await self._log_moderation(ctx.guild, case, ctx.author, member)
         
         embed = (
@@ -598,7 +607,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     @commands.has_permissions(manage_messages=True)
     @app_commands.describe(case_id="The case ID to view")
     async def case(self, ctx: commands.Context, case_id: int):
-        mod_case = await self.bot.db.get_moderation_case(ctx.guild.id, case_id)
+        mod_case = await self.repos.moderation.get_case(ctx.guild.id, case_id)
         
         if not mod_case:
             return await ctx.send(embed=EmbedBuilder.error("Error", f"Case #{case_id} not found."))
@@ -646,7 +655,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     @commands.has_permissions(manage_messages=True)
     @app_commands.describe(user="The user to view cases for")
     async def cases(self, ctx: commands.Context, user: discord.User):
-        cases = await self.bot.db.get_user_cases(ctx.guild.id, user.id)
+        cases = await self.repos.moderation.get_user_cases(ctx.guild.id, user.id)
         
         if not cases:
             return await ctx.send(embed=EmbedBuilder.info("No Cases", f"{user.mention} has no moderation cases."))
@@ -677,7 +686,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     @commands.has_permissions(manage_messages=True)
     @app_commands.describe(user="The user to view warnings for")
     async def warnings(self, ctx: commands.Context, user: discord.Member):
-        user_data = await self.bot.db.get_user_data(user.id, ctx.guild.id)
+        user_data = await self.repos.users.get_user_data(user.id, ctx.guild.id)
         
         if not user_data or user_data.active_warnings == 0:
             return await ctx.send(embed=EmbedBuilder.info("No Warnings", f"{user.mention} has no active warnings."))
@@ -707,7 +716,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         *,
         reason: str = "No reason provided"
     ):
-        user_data = await self.bot.db.get_user_data(user.id, ctx.guild.id)
+        user_data = await self.repos.users.get_user_data(user.id, ctx.guild.id)
         
         if not user_data or user_data.active_warnings == 0:
             return await ctx.send(embed=EmbedBuilder.info("No Warnings", f"{user.mention} has no active warnings."))
@@ -715,7 +724,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         cleared = user_data.active_warnings
         user_data.active_warnings = 0
         user_data.warning_points = 0
-        await self.bot.db.save_user_data(user_data)
+        await self.repos.users.save_user_data(user_data)
         
         embed = (
             EmbedBuilder(

@@ -18,8 +18,9 @@ from src.utils.permissions import bot_owner_only
 
 
 class AdminCog(commands.Cog, name="Admin"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self.start_time = datetime.now()
     
     @commands.hybrid_group(name="config", description="Server configuration")
@@ -27,9 +28,10 @@ class AdminCog(commands.Cog, name="Admin"):
     async def config(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
             await ctx.defer()
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             if not guild_config:
-                return await ctx.send("No configuration found.")
+                from src.models.guild import GuildConfig
+                guild_config = GuildConfig(guild_id=ctx.guild.id)
             
             settings = guild_config.settings
             
@@ -58,9 +60,13 @@ class AdminCog(commands.Cog, name="Admin"):
         if len(prefix) > 5:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Prefix must be 5 characters or less."))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.prefix = prefix
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Prefix Updated", f"Command prefix set to `{prefix}`"))
     
@@ -68,12 +74,15 @@ class AdminCog(commands.Cog, name="Admin"):
     @commands.has_permissions(administrator=True)
     async def config_modrole(self, ctx: commands.Context, action: str, role: discord.Role):
         await ctx.defer()
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         
         if action.lower() == "add":
             if role.id not in guild_config.settings.moderator_roles:
                 guild_config.settings.moderator_roles.append(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Moderator Role", f"{role.mention} added as moderator role."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Added", "This role is already a moderator role."))
@@ -81,7 +90,7 @@ class AdminCog(commands.Cog, name="Admin"):
         elif action.lower() == "remove":
             if role.id in guild_config.settings.moderator_roles:
                 guild_config.settings.moderator_roles.remove(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Moderator Role", f"{role.mention} removed from moderator roles."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Found", "This role is not a moderator role."))
@@ -93,12 +102,15 @@ class AdminCog(commands.Cog, name="Admin"):
     @commands.has_permissions(administrator=True)
     async def config_adminrole(self, ctx: commands.Context, action: str, role: discord.Role):
         await ctx.defer()
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         
         if action.lower() == "add":
             if role.id not in guild_config.settings.admin_roles:
                 guild_config.settings.admin_roles.append(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Admin Role", f"{role.mention} added as admin role."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Added", "This role is already an admin role."))
@@ -106,7 +118,7 @@ class AdminCog(commands.Cog, name="Admin"):
         elif action.lower() == "remove":
             if role.id in guild_config.settings.admin_roles:
                 guild_config.settings.admin_roles.remove(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Admin Role", f"{role.mention} removed from admin roles."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Found", "This role is not an admin role."))
@@ -120,7 +132,7 @@ class AdminCog(commands.Cog, name="Admin"):
         
         uptime = datetime.now() - self.start_time
         
-        total_members = sum(g.member_count for g in self.bot.guilds)
+        total_members = sum(g.member_count or 0 for g in self.bot.guilds)
         total_channels = sum(len(g.channels) for g in self.bot.guilds)
         
         embed = (
@@ -149,7 +161,7 @@ class AdminCog(commands.Cog, name="Admin"):
     async def backup(self, ctx: commands.Context):
         await ctx.defer()
         
-        guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
         if not guild_config:
             return await ctx.send(embed=EmbedBuilder.error("Error", "No configuration to backup."))
         
@@ -201,7 +213,7 @@ class AdminCog(commands.Cog, name="Admin"):
             config = GuildConfig.from_dict(data)
             config.guild_id = ctx.guild.id
             
-            await self.bot.db.save_guild_config(config)
+            await self.repos.guilds.save_config(config)
             
             embed = (
                 EmbedBuilder(
@@ -238,7 +250,7 @@ class AdminCog(commands.Cog, name="Admin"):
                     try:
                         await member.add_roles(role, reason=f"Role all by {ctx.author}")
                         count += 1
-                    except:
+                    except Exception:
                         errors += 1
         
         elif action.lower() == "remove":
@@ -247,7 +259,7 @@ class AdminCog(commands.Cog, name="Admin"):
                     try:
                         await member.remove_roles(role, reason=f"Role all by {ctx.author}")
                         count += 1
-                    except:
+                    except Exception:
                         errors += 1
         
         else:
@@ -318,7 +330,8 @@ class AdminCog(commands.Cog, name="Admin"):
     
     @commands.hybrid_command(name="dbstats", description="View database statistics")
     async def dbstats(self, ctx: commands.Context):
-        db_stats = await self.bot.db.stats()
+        # Access engine statistics through the registry's client
+        db_stats = await self.repos.client.stats()
         
         embed = (
             EmbedBuilder(

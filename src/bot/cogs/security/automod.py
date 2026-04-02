@@ -56,8 +56,9 @@ class SpamTracker:
 
 
 class AutoModCog(commands.Cog, name="AutoMod"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self.spam_tracker = SpamTracker()
         self.cleanup_task.start()
     
@@ -69,7 +70,7 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         self.spam_tracker.cleanup()
     
     async def _is_exempt(self, message: discord.Message) -> bool:
-        guild_config = await self.bot.db.get_guild_config(message.guild.id)
+        guild_config = await self.repos.guilds.get_config(message.guild.id)
         if not guild_config:
             return True
         
@@ -102,9 +103,11 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         violations = self.spam_tracker.get_violations(message.guild.id, message.author.id)
         
         if settings.warn_on_violation:
-            user_data = await self.bot.db.get_or_create_user_data(message.author.id, message.guild.id)
+            user_data = await self.repos.users.get_user_data(message.author.id, message.guild.id)
+            if not user_data:
+                user_data = UserData(user_id=message.author.id, guild_id=message.guild.id)
             user_data.add_warning()
-            await self.bot.db.save_user_data(user_data)
+            await self.repos.users.save_user_data(user_data)
         
         if settings.mute_on_repeated and violations >= settings.mute_threshold:
             if isinstance(message.author, discord.Member):
@@ -133,7 +136,7 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         if not message.content:
             return
         
-        guild_config = await self.bot.db.get_guild_config(message.guild.id)
+        guild_config = await self.repos.guilds.get_config(message.guild.id)
         if not guild_config:
             return
         
@@ -200,7 +203,7 @@ class AutoModCog(commands.Cog, name="AutoMod"):
     @commands.has_permissions(manage_messages=True)
     async def automod(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             if not guild_config:
                 return await ctx.send("No configuration found.")
             
@@ -229,18 +232,24 @@ class AutoModCog(commands.Cog, name="AutoMod"):
     @automod.command(name="enable", description="Enable AutoMod")
     @commands.has_permissions(manage_messages=True)
     async def automod_enable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.automod.enabled = True
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("AutoMod", "AutoMod has been enabled."))
     
     @automod.command(name="disable", description="Disable AutoMod")
     @commands.has_permissions(manage_messages=True)
     async def automod_disable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.automod.enabled = False
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("AutoMod", "AutoMod has been disabled."))
     
@@ -265,9 +274,12 @@ class AutoModCog(commands.Cog, name="AutoMod"):
                 f"Valid features: {', '.join(feature_map.keys())}"
             ))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         setattr(guild_config.settings.automod, feature_map[feature.lower()], enabled)
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         status = "enabled" if enabled else "disabled"
         await ctx.send(embed=EmbedBuilder.success("AutoMod", f"Anti-{feature} has been {status}."))
@@ -292,16 +304,21 @@ class AutoModCog(commands.Cog, name="AutoMod"):
                 f"Valid settings: {', '.join(threshold_map.keys())}"
             ))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         setattr(guild_config.settings.automod, threshold_map[setting.lower()], value)
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Threshold Updated", f"{setting} set to {value}"))
     
     @automod.command(name="ignore", description="Ignore a channel or role from AutoMod")
     @commands.has_permissions(manage_messages=True)
     async def automod_ignore(self, ctx: commands.Context, action: str, target_type: str, target: str):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         
         if target_type.lower() == "channel":
             try:
@@ -309,7 +326,7 @@ class AutoModCog(commands.Cog, name="AutoMod"):
                 target_list = guild_config.settings.automod.ignored_channels
                 target_id = channel.id
                 target_name = channel.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "Channel not found."))
         
         elif target_type.lower() == "role":
@@ -318,7 +335,7 @@ class AutoModCog(commands.Cog, name="AutoMod"):
                 target_list = guild_config.settings.automod.ignored_roles
                 target_id = role.id
                 target_name = role.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "Role not found."))
         
         else:
@@ -327,7 +344,7 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         if action.lower() == "add":
             if target_id not in target_list:
                 target_list.append(target_id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Ignored", f"{target_name} will be ignored by AutoMod."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Ignored", "This target is already ignored."))
@@ -335,7 +352,7 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         elif action.lower() == "remove":
             if target_id in target_list:
                 target_list.remove(target_id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Removed", f"{target_name} will no longer be ignored."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Ignored", "This target is not in the ignore list."))

@@ -15,8 +15,9 @@ from src.models.filter import FilterRule, FilterType, FilterAction, FilterConfig
 
 
 class FilterCog(commands.Cog, name="Filter"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
     
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -27,7 +28,7 @@ class FilterCog(commands.Cog, name="Filter"):
         if not message.content:
             return
         
-        filter_config = await self.bot.db.get_filter_config(message.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(message.guild.id)
         if not filter_config or not filter_config.enabled:
             return
         
@@ -46,7 +47,7 @@ class FilterCog(commands.Cog, name="Filter"):
         rule, matched_content = matches[0]
         
         rule.record_match()
-        await self.bot.db.save_filter_config(filter_config)
+        await self.repos.utility.save_filter_config(filter_config)
         
         strikes = filter_config.add_strike(message.author.id, rule.id)
         
@@ -68,9 +69,7 @@ class FilterCog(commands.Cog, name="Filter"):
     ):
         try:
             await message.delete()
-        except discord.Forbidden:
-            pass
-        except discord.NotFound:
+        except (discord.Forbidden, discord.NotFound):
             pass
         
         if action == FilterAction.LOG:
@@ -84,9 +83,12 @@ class FilterCog(commands.Cog, name="Filter"):
                 pass
         
         if action == FilterAction.WARN:
-            user_data = await self.bot.db.get_or_create_user_data(message.author.id, message.guild.id)
+            user_data = await self.repos.users.get_user_data(message.author.id, message.guild.id)
+            if not user_data:
+                user_data = UserData(user_id=message.author.id, guild_id=message.guild.id)
+            
             user_data.add_warning()
-            await self.bot.db.save_user_data(user_data)
+            await self.repos.users.save_user_data(user_data)
         
         elif action == FilterAction.MUTE:
             if isinstance(message.author, discord.Member):
@@ -118,7 +120,7 @@ class FilterCog(commands.Cog, name="Filter"):
         matched_content: str,
         action: FilterAction
     ):
-        filter_config = await self.bot.db.get_filter_config(message.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(message.guild.id)
         if not filter_config or not filter_config.log_channel:
             return
         
@@ -142,7 +144,7 @@ class FilterCog(commands.Cog, name="Filter"):
     @commands.has_permissions(manage_messages=True)
     async def filter(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
-            filter_config = await self.bot.db.get_filter_config(ctx.guild.id)
+            filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
             
             embed = (
                 EmbedBuilder(
@@ -161,18 +163,24 @@ class FilterCog(commands.Cog, name="Filter"):
     @filter.command(name="enable", description="Enable the word filter")
     @commands.has_permissions(manage_messages=True)
     async def filter_enable(self, ctx: commands.Context):
-        filter_config = await self.bot.db.get_or_create_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
+        if not filter_config:
+            filter_config = FilterConfig(guild_id=ctx.guild.id)
+            
         filter_config.enabled = True
-        await self.bot.db.save_filter_config(filter_config)
+        await self.repos.utility.save_filter_config(filter_config)
         
         await ctx.send(embed=EmbedBuilder.success("Word Filter", "Word filter has been enabled."))
     
     @filter.command(name="disable", description="Disable the word filter")
     @commands.has_permissions(manage_messages=True)
     async def filter_disable(self, ctx: commands.Context):
-        filter_config = await self.bot.db.get_or_create_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
+        if not filter_config:
+            filter_config = FilterConfig(guild_id=ctx.guild.id)
+            
         filter_config.enabled = False
-        await self.bot.db.save_filter_config(filter_config)
+        await self.repos.utility.save_filter_config(filter_config)
         
         await ctx.send(embed=EmbedBuilder.success("Word Filter", "Word filter has been disabled."))
     
@@ -207,7 +215,9 @@ class FilterCog(commands.Cog, name="Filter"):
             except re.error as e:
                 return await ctx.send(embed=EmbedBuilder.error("Invalid Regex", str(e)))
         
-        filter_config = await self.bot.db.get_or_create_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
+        if not filter_config:
+            filter_config = FilterConfig(guild_id=ctx.guild.id)
         
         rule = FilterRule(
             id=generate_id("RULE"),
@@ -219,7 +229,7 @@ class FilterCog(commands.Cog, name="Filter"):
         )
         
         filter_config.add_rule(rule)
-        await self.bot.db.save_filter_config(filter_config)
+        await self.repos.utility.save_filter_config(filter_config)
         
         embed = (
             EmbedBuilder(
@@ -239,12 +249,12 @@ class FilterCog(commands.Cog, name="Filter"):
     @filter.command(name="remove", description="Remove a filter rule")
     @commands.has_permissions(manage_messages=True)
     async def filter_remove(self, ctx: commands.Context, rule_id: str):
-        filter_config = await self.bot.db.get_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
         if not filter_config:
             return await ctx.send(embed=EmbedBuilder.error("Error", "No filter configuration found."))
         
         if filter_config.remove_rule(rule_id):
-            await self.bot.db.save_filter_config(filter_config)
+            await self.repos.utility.save_filter_config(filter_config)
             await ctx.send(embed=EmbedBuilder.success("Rule Removed", f"Filter rule `{rule_id}` has been removed."))
         else:
             await ctx.send(embed=EmbedBuilder.error("Not Found", f"Rule `{rule_id}` not found."))
@@ -252,7 +262,7 @@ class FilterCog(commands.Cog, name="Filter"):
     @filter.command(name="list", description="List all filter rules")
     @commands.has_permissions(manage_messages=True)
     async def filter_list(self, ctx: commands.Context):
-        filter_config = await self.bot.db.get_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
         if not filter_config or not filter_config.rules:
             return await ctx.send(embed=EmbedBuilder.info("No Rules", "No filter rules configured."))
         
@@ -282,9 +292,12 @@ class FilterCog(commands.Cog, name="Filter"):
     @filter.command(name="logchannel", description="Set the filter log channel")
     @commands.has_permissions(manage_messages=True)
     async def filter_logchannel(self, ctx: commands.Context, channel: discord.TextChannel):
-        filter_config = await self.bot.db.get_or_create_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
+        if not filter_config:
+            filter_config = FilterConfig(guild_id=ctx.guild.id)
+            
         filter_config.log_channel = channel.id
-        await self.bot.db.save_filter_config(filter_config)
+        await self.repos.utility.save_filter_config(filter_config)
         
         await ctx.send(embed=EmbedBuilder.success("Log Channel", f"Filter logs will be sent to {channel.mention}"))
     
@@ -297,7 +310,9 @@ class FilterCog(commands.Cog, name="Filter"):
         target_type: str,
         target: str
     ):
-        filter_config = await self.bot.db.get_or_create_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
+        if not filter_config:
+            filter_config = FilterConfig(guild_id=ctx.guild.id)
         
         if target_type.lower() == "role":
             try:
@@ -305,7 +320,7 @@ class FilterCog(commands.Cog, name="Filter"):
                 target_id = role.id
                 target_list = filter_config.global_exempt_roles
                 target_name = role.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "Role not found."))
         
         elif target_type.lower() == "channel":
@@ -314,7 +329,7 @@ class FilterCog(commands.Cog, name="Filter"):
                 target_id = channel.id
                 target_list = filter_config.global_exempt_channels
                 target_name = channel.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "Channel not found."))
         
         elif target_type.lower() == "user":
@@ -323,7 +338,7 @@ class FilterCog(commands.Cog, name="Filter"):
                 target_id = user.id
                 target_list = filter_config.global_exempt_users
                 target_name = user.mention
-            except:
+            except Exception:
                 return await ctx.send(embed=EmbedBuilder.error("Error", "User not found."))
         
         else:
@@ -332,7 +347,7 @@ class FilterCog(commands.Cog, name="Filter"):
         if action.lower() == "add":
             if target_id not in target_list:
                 target_list.append(target_id)
-                await self.bot.db.save_filter_config(filter_config)
+                await self.repos.utility.save_filter_config(filter_config)
                 await ctx.send(embed=EmbedBuilder.success("Exemption Added", f"{target_name} is now exempt from filtering."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Exempt", "This target is already exempt."))
@@ -340,7 +355,7 @@ class FilterCog(commands.Cog, name="Filter"):
         elif action.lower() == "remove":
             if target_id in target_list:
                 target_list.remove(target_id)
-                await self.bot.db.save_filter_config(filter_config)
+                await self.repos.utility.save_filter_config(filter_config)
                 await ctx.send(embed=EmbedBuilder.success("Exemption Removed", f"{target_name} is no longer exempt from filtering."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Exempt", "This target is not in the exemption list."))
@@ -351,7 +366,7 @@ class FilterCog(commands.Cog, name="Filter"):
     @filter.command(name="test", description="Test if a message would be filtered")
     @commands.has_permissions(manage_messages=True)
     async def filter_test(self, ctx: commands.Context, *, text: str):
-        filter_config = await self.bot.db.get_filter_config(ctx.guild.id)
+        filter_config = await self.repos.utility.get_filter_config(ctx.guild.id)
         if not filter_config:
             return await ctx.send(embed=EmbedBuilder.info("No Filter", "No filter configuration found."))
         

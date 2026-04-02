@@ -15,8 +15,9 @@ from src.utils.embed_builder import EmbedBuilder, EmbedColor
 
 
 class HostCheckCog(commands.Cog, name="HostCheck"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self._session: Optional[aiohttp.ClientSession] = None
         self._check_task_started = False
     
@@ -35,7 +36,7 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
     @tasks.loop(minutes=1)
     async def host_check_loop(self):
         try:
-            checks = await self.bot.db.get_all_active_host_checks()
+            checks = await self.repos.utility.get_all_active_host_checks()
             
             for check in checks:
                 check_id = check.get('id')
@@ -46,7 +47,7 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
                 
                 new_status = await self._perform_check(url, check_type)
                 
-                await self.bot.db.update_host_check_status(check_id, new_status)
+                await self.repos.utility.update_host_check_status(check_id, new_status)
                 
                 if notify_channel_id and last_status != new_status and last_status != 'pending':
                     await self._send_notification(
@@ -56,7 +57,7 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
                         last_status,
                         new_status
                     )
-        except Exception as e:
+        except Exception:
             pass
     
     @host_check_loop.before_loop
@@ -128,7 +129,7 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
                 )
             
             await channel.send(embed=embed)
-        except Exception as e:
+        except Exception:
             pass
     
     @commands.group(name="host", aliases=["uptime", "monitor"], description="Host monitoring commands")
@@ -162,14 +163,19 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
         
-        check_id = await self.bot.db.save_host_check(
-            guild_id=ctx.guild.id,
-            url=url,
-            name=name,
-            check_type='http',
-            check_interval=60,
-            notify_channel_id=notify_channel.id if notify_channel else None
-        )
+        # Consistent host check persistence
+        check_data = {
+            'id': str(ctx.guild.id) + "_" + name.replace(" ", "_"),
+            'guild_id': ctx.guild.id,
+            'url': url,
+            'name': name,
+            'check_type': 'http',
+            'check_interval': 60,
+            'notify_channel_id': notify_channel.id if notify_channel else None,
+            'is_active': True,
+            'created_at': datetime.now().isoformat()
+        }
+        await self.repos.utility.save_host_check(check_data)
         
         await ctx.send(
             embed=EmbedBuilder.success(
@@ -182,11 +188,11 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
     @host.command(name="remove", aliases=["delete"], description="Remove a monitored host")
     @commands.has_permissions(manage_guild=True)
     async def remove_host(self, ctx: commands.Context, *, name: str):
-        checks = await self.bot.db.get_host_checks(ctx.guild.id)
+        checks = await self.repos.utility.get_host_checks(ctx.guild.id)
         
         for check in checks:
             if check.get('name', '').lower() == name.lower():
-                await self.bot.db.delete_host_check(check.get('id'))
+                await self.repos.utility.delete_host_check(check.get('id'))
                 return await ctx.send(
                     embed=EmbedBuilder.success("Host Removed", f"Stopped monitoring **{name}**")
                 )
@@ -197,7 +203,7 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
     
     @host.command(name="list", description="List all monitored hosts")
     async def list_hosts(self, ctx: commands.Context):
-        checks = await self.bot.db.get_host_checks(ctx.guild.id)
+        checks = await self.repos.utility.get_host_checks(ctx.guild.id)
         
         if not checks:
             return await ctx.send(
@@ -266,7 +272,7 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
     
     @host.command(name="status", description="View all host statuses")
     async def host_status(self, ctx: commands.Context):
-        checks = await self.bot.db.get_host_checks(ctx.guild.id)
+        checks = await self.repos.utility.get_host_checks(ctx.guild.id)
         
         if not checks:
             return await ctx.send(
@@ -301,25 +307,18 @@ class HostCheckCog(commands.Cog, name="HostCheck"):
     
     @host.command(name="nodes", aliases=["shards"], description="View bot node status")
     async def node_status(self, ctx: commands.Context):
-        nodes = await self.bot.db.get_all_node_status()
+        nodes = await self.repos.utility.get_all_node_status()
         
         if not nodes:
-            if self.bot.shard_id is not None:
-                nodes = [{
-                    'shard_id': self.bot.shard_id,
-                    'status': 'online',
-                    'latency': self.bot.latency * 1000 if self.bot.latency else 0,
-                    'guild_count': len(self.bot.guilds),
-                    'memory_mb': 0
-                }]
-            else:
-                nodes = [{
-                    'shard_id': 0,
-                    'status': 'online',
-                    'latency': self.bot.latency * 1000 if self.bot.latency else 0,
-                    'guild_count': len(self.bot.guilds),
-                    'memory_mb': 0
-                }]
+            shard_id = self.bot.shard_id if self.bot.shard_id is not None else 0
+            nodes = [{
+                'shard_id': shard_id,
+                'status': 'online',
+                'latency': self.bot.latency * 1000 if self.bot.latency else 0,
+                'guild_count': len(self.bot.guilds),
+                'member_count': sum(g.member_count or 0 for g in self.bot.guilds),
+                'memory_mb': psutil.Process().memory_info().rss / 1024 / 1024
+            }]
         
         embed = (
             EmbedBuilder(

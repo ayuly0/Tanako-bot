@@ -14,12 +14,12 @@ from src.utils.embed_builder import EmbedBuilder, EmbedColor
 
 
 class LevelingCog(commands.Cog, name="Leveling"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self.xp_min = 15
         self.xp_max = 25
         self.daily_message_limit = 15
-        self._cooldowns: dict = {}
     
     def _xp_for_level(self, level: int) -> int:
         return int(5 * (level ** 2) + 50 * level + 100)
@@ -40,10 +40,13 @@ class LevelingCog(commands.Cog, name="Leveling"):
         today = date.today().isoformat()
         
         try:
-            level_data = await self.bot.db.get_user_level(user_id, guild_id)
+            level_data = await self.repos.levels.get_user_level(user_id, guild_id)
             
             if level_data is None:
                 level_data = {
+                    'id': f"{guild_id}_{user_id}",
+                    'user_id': user_id,
+                    'guild_id': guild_id,
                     'xp': 0,
                     'level': 0,
                     'total_xp': 0,
@@ -74,15 +77,7 @@ class LevelingCog(commands.Cog, name="Leveling"):
                 leveled_up = True
                 xp_needed = self._xp_for_level(level_data['level'] + 1)
             
-            await self.bot.db.save_user_level(
-                user_id=user_id,
-                guild_id=guild_id,
-                xp=level_data['xp'],
-                level=level_data['level'],
-                total_xp=level_data['total_xp'],
-                daily_messages=level_data['daily_messages'],
-                last_xp_date=level_data['last_xp_date']
-            )
+            await self.repos.levels.save_level(level_data)
             
             if leveled_up:
                 embed = (
@@ -101,14 +96,14 @@ class LevelingCog(commands.Cog, name="Leveling"):
                     await message.channel.send(embed=embed, delete_after=30)
                 except:
                     pass
-        except Exception as e:
+        except Exception:
             pass
     
     @commands.hybrid_command(name="level", description="Check your or someone's level")
     async def level(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         user = user or ctx.author
         
-        level_data = await self.bot.db.get_user_level(user.id, ctx.guild.id)
+        level_data = await self.repos.levels.get_user_level(user.id, ctx.guild.id)
         
         if not level_data:
             return await ctx.send(
@@ -129,7 +124,7 @@ class LevelingCog(commands.Cog, name="Leveling"):
                 title=f"Level Stats: {user.display_name}",
                 description=f"**Level {current_level}**\n{progress_bar}"
             )
-            .color(user.color if user.color.value else EmbedColor.INFO.value)
+            .color(user.color if user.color.value else EmbedColor.INFO)
             .thumbnail(user.display_avatar.url)
             .field("Current XP", f"{current_xp:,}/{xp_needed:,}", True)
             .field("Total XP", f"{total_xp:,}", True)
@@ -149,7 +144,7 @@ class LevelingCog(commands.Cog, name="Leveling"):
         page = max(1, page)
         per_page = 10
         
-        leaderboard = await self.bot.db.get_level_leaderboard(ctx.guild.id, limit=100)
+        leaderboard = await self.repos.levels.get_leaderboard(ctx.guild.id, limit=100)
         
         if not leaderboard:
             return await ctx.send(

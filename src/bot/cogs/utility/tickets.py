@@ -17,15 +17,16 @@ from src.models.ticket import Ticket, TicketStatus, TicketPriority, TicketCatego
 
 
 class TicketView(discord.ui.View):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         super().__init__(timeout=None)
         self.bot = bot
+        self.repos = bot.registry
     
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="ticket:close", emoji="🔒")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         
-        ticket = await self.bot.db.get_ticket_by_channel(interaction.channel.id)
+        ticket = await self.repos.tickets.get_by_channel(interaction.channel.id)
         if not ticket:
             return await interaction.followup.send("This is not a ticket channel.", ephemeral=True)
         
@@ -33,7 +34,7 @@ class TicketView(discord.ui.View):
             return await interaction.followup.send("This ticket is already closed.", ephemeral=True)
         
         ticket.close(interaction.user.id, "Closed via button")
-        await self.bot.db.save_ticket(ticket)
+        await self.repos.tickets.save_ticket(ticket)
         
         embed = EmbedBuilder.ticket_close(interaction.user, ticket.ticket_id)
         await interaction.channel.send(embed=embed)
@@ -49,11 +50,11 @@ class TicketView(discord.ui.View):
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         
-        ticket = await self.bot.db.get_ticket_by_channel(interaction.channel.id)
+        ticket = await self.repos.tickets.get_by_channel(interaction.channel.id)
         if not ticket:
             return await interaction.followup.send("This is not a ticket channel.", ephemeral=True)
         
-        guild_config = await self.bot.db.get_guild_config(interaction.guild.id)
+        guild_config = await self.repos.guilds.get_config(interaction.guild.id)
         if not guild_config:
             return await interaction.followup.send("Configuration not found.", ephemeral=True)
         
@@ -67,36 +68,38 @@ class TicketView(discord.ui.View):
         if ticket.claimed_by:
             if ticket.claimed_by == interaction.user.id:
                 ticket.unclaim()
-                await self.bot.db.save_ticket(ticket)
+                await self.repos.tickets.save_ticket(ticket)
                 await interaction.followup.send(f"You unclaimed this ticket.", ephemeral=True)
                 await interaction.channel.send(f"📝 {interaction.user.mention} unclaimed this ticket.")
             else:
                 await interaction.followup.send(f"This ticket is already claimed by <@{ticket.claimed_by}>.", ephemeral=True)
         else:
             ticket.claim(interaction.user.id)
-            await self.bot.db.save_ticket(ticket)
+            await self.repos.tickets.save_ticket(ticket)
             await interaction.followup.send(f"You claimed this ticket.", ephemeral=True)
             await interaction.channel.send(f"📝 {interaction.user.mention} claimed this ticket.")
 
 
 class CreateTicketView(discord.ui.View):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         super().__init__(timeout=None)
         self.bot = bot
+        self.repos = bot.registry
     
     @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.success, custom_id="ticket:create", emoji="🎫")
     async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         
-        guild_config = await self.bot.db.get_guild_config(interaction.guild.id)
+        guild_config = await self.repos.guilds.get_config(interaction.guild.id)
         if not guild_config:
-            return await interaction.followup.send("Ticket system is not configured.", ephemeral=True)
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=interaction.guild.id)
         
         settings = guild_config.settings.tickets
         if not settings.enabled:
             return await interaction.followup.send("Ticket system is disabled.", ephemeral=True)
         
-        user_tickets = await self.bot.db.get_user_open_tickets(interaction.guild.id, interaction.user.id)
+        user_tickets = await self.repos.tickets.get_user_open_tickets(interaction.guild.id, interaction.user.id)
         if len(user_tickets) >= settings.max_open_tickets:
             return await interaction.followup.send(
                 f"You already have {len(user_tickets)} open ticket(s). Maximum is {settings.max_open_tickets}.",
@@ -138,8 +141,8 @@ class CreateTicketView(discord.ui.View):
             creator_id=interaction.user.id
         )
         
-        await self.bot.db.save_ticket(ticket)
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.tickets.save_ticket(ticket)
+        await self.repos.guilds.save_config(guild_config)
         
         embed = EmbedBuilder.ticket_create(interaction.user, "General", ticket_id)
         view = TicketView(self.bot)
@@ -149,8 +152,9 @@ class CreateTicketView(discord.ui.View):
 
 
 class TicketsCog(commands.Cog, name="Tickets"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
         self.bot.add_view(TicketView(bot))
         self.bot.add_view(CreateTicketView(bot))
     
@@ -174,15 +178,16 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @ticket.command(name="create", description="Create a new ticket")
     async def ticket_create(self, ctx: commands.Context):
         await ctx.defer()
-        guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
         if not guild_config:
-            return await ctx.send(embed=EmbedBuilder.error("Error", "Ticket system is not configured."))
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         
         settings = guild_config.settings.tickets
         if not settings.enabled:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Ticket system is disabled."))
         
-        user_tickets = await self.bot.db.get_user_open_tickets(ctx.guild.id, ctx.author.id)
+        user_tickets = await self.repos.tickets.get_user_open_tickets(ctx.guild.id, ctx.author.id)
         if len(user_tickets) >= settings.max_open_tickets:
             return await ctx.send(embed=EmbedBuilder.error(
                 "Limit Reached",
@@ -224,8 +229,8 @@ class TicketsCog(commands.Cog, name="Tickets"):
             creator_id=ctx.author.id
         )
         
-        await self.bot.db.save_ticket(ticket)
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.tickets.save_ticket(ticket)
+        await self.repos.guilds.save_config(guild_config)
         
         embed = EmbedBuilder.ticket_create(ctx.author, "General", ticket_id)
         view = TicketView(self.bot)
@@ -236,7 +241,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @ticket.command(name="close", description="Close the current ticket")
     async def ticket_close(self, ctx: commands.Context, *, reason: str = "No reason provided"):
         await ctx.defer()
-        ticket = await self.bot.db.get_ticket_by_channel(ctx.channel.id)
+        ticket = await self.repos.tickets.get_by_channel(ctx.channel.id)
         if not ticket:
             return await ctx.send(embed=EmbedBuilder.error("Error", "This is not a ticket channel."))
         
@@ -245,14 +250,14 @@ class TicketsCog(commands.Cog, name="Tickets"):
         
         if ticket.creator_id != ctx.author.id:
             if not ctx.author.guild_permissions.manage_channels:
-                guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+                guild_config = await self.repos.guilds.get_config(ctx.guild.id)
                 support_roles = guild_config.settings.tickets.support_role_ids if guild_config else []
                 user_roles = [r.id for r in ctx.author.roles]
                 if not any(role_id in user_roles for role_id in support_roles):
                     return await ctx.send(embed=EmbedBuilder.error("Error", "You don't have permission to close this ticket."))
         
         ticket.close(ctx.author.id, reason)
-        await self.bot.db.save_ticket(ticket)
+        await self.repos.tickets.save_ticket(ticket)
         
         embed = EmbedBuilder.ticket_close(ctx.author, ticket.ticket_id, reason)
         await ctx.send(embed=embed)
@@ -267,7 +272,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @ticket.command(name="add", description="Add a user to the ticket")
     async def ticket_add(self, ctx: commands.Context, user: discord.Member):
         await ctx.defer()
-        ticket = await self.bot.db.get_ticket_by_channel(ctx.channel.id)
+        ticket = await self.repos.tickets.get_by_channel(ctx.channel.id)
         if not ticket:
             return await ctx.send(embed=EmbedBuilder.error("Error", "This is not a ticket channel."))
         
@@ -278,14 +283,14 @@ class TicketsCog(commands.Cog, name="Tickets"):
         
         if user.id not in ticket.added_users:
             ticket.added_users.append(user.id)
-            await self.bot.db.save_ticket(ticket)
+            await self.repos.tickets.save_ticket(ticket)
         
         await ctx.send(embed=EmbedBuilder.success("User Added", f"{user.mention} has been added to this ticket."))
     
     @ticket.command(name="remove", description="Remove a user from the ticket")
     async def ticket_remove(self, ctx: commands.Context, user: discord.Member):
         await ctx.defer()
-        ticket = await self.bot.db.get_ticket_by_channel(ctx.channel.id)
+        ticket = await self.repos.tickets.get_by_channel(ctx.channel.id)
         if not ticket:
             return await ctx.send(embed=EmbedBuilder.error("Error", "This is not a ticket channel."))
         
@@ -299,14 +304,14 @@ class TicketsCog(commands.Cog, name="Tickets"):
         
         if user.id in ticket.added_users:
             ticket.added_users.remove(user.id)
-            await self.bot.db.save_ticket(ticket)
+            await self.repos.tickets.save_ticket(ticket)
         
         await ctx.send(embed=EmbedBuilder.success("User Removed", f"{user.mention} has been removed from this ticket."))
     
     @ticket.command(name="claim", description="Claim the current ticket")
     async def ticket_claim(self, ctx: commands.Context):
         await ctx.defer()
-        ticket = await self.bot.db.get_ticket_by_channel(ctx.channel.id)
+        ticket = await self.repos.tickets.get_by_channel(ctx.channel.id)
         if not ticket:
             return await ctx.send(embed=EmbedBuilder.error("Error", "This is not a ticket channel."))
         
@@ -316,14 +321,14 @@ class TicketsCog(commands.Cog, name="Tickets"):
             return await ctx.send(embed=EmbedBuilder.error("Error", f"This ticket is already claimed by <@{ticket.claimed_by}>."))
         
         ticket.claim(ctx.author.id)
-        await self.bot.db.save_ticket(ticket)
+        await self.repos.tickets.save_ticket(ticket)
         
         await ctx.send(embed=EmbedBuilder.success("Ticket Claimed", f"{ctx.author.mention} has claimed this ticket."))
     
     @ticket.command(name="unclaim", description="Unclaim the current ticket")
     async def ticket_unclaim(self, ctx: commands.Context):
         await ctx.defer()
-        ticket = await self.bot.db.get_ticket_by_channel(ctx.channel.id)
+        ticket = await self.repos.tickets.get_by_channel(ctx.channel.id)
         if not ticket:
             return await ctx.send(embed=EmbedBuilder.error("Error", "This is not a ticket channel."))
         
@@ -334,7 +339,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
             return await ctx.send(embed=EmbedBuilder.error("Error", "You can only unclaim tickets you have claimed."))
         
         ticket.unclaim()
-        await self.bot.db.save_ticket(ticket)
+        await self.repos.tickets.save_ticket(ticket)
         
         await ctx.send(embed=EmbedBuilder.success("Ticket Unclaimed", "This ticket has been unclaimed."))
     
@@ -343,7 +348,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
     async def ticketconfig(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
             await ctx.defer()
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             if not guild_config:
                 return await ctx.send("No configuration found.")
             
@@ -368,9 +373,12 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @commands.has_permissions(manage_guild=True)
     async def ticketconfig_enable(self, ctx: commands.Context):
         await ctx.defer()
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         guild_config.settings.tickets.enabled = True
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Ticket System", "Ticket system has been enabled."))
     
@@ -378,9 +386,12 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @commands.has_permissions(manage_guild=True)
     async def ticketconfig_disable(self, ctx: commands.Context):
         await ctx.defer()
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         guild_config.settings.tickets.enabled = False
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Ticket System", "Ticket system has been disabled."))
     
@@ -388,9 +399,12 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @commands.has_permissions(manage_guild=True)
     async def ticketconfig_category(self, ctx: commands.Context, category: discord.CategoryChannel):
         await ctx.defer()
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         guild_config.settings.tickets.category_id = category.id
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Ticket Category", f"Tickets will be created in {category.mention}"))
     
@@ -398,12 +412,15 @@ class TicketsCog(commands.Cog, name="Tickets"):
     @commands.has_permissions(manage_guild=True)
     async def ticketconfig_supportrole(self, ctx: commands.Context, action: str, role: discord.Role):
         await ctx.defer()
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            from src.models.guild import GuildConfig
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         
         if action.lower() == "add":
             if role.id not in guild_config.settings.tickets.support_role_ids:
                 guild_config.settings.tickets.support_role_ids.append(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Support Role", f"{role.mention} added as a support role."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Added", "This role is already a support role."))
@@ -411,7 +428,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
         elif action.lower() == "remove":
             if role.id in guild_config.settings.tickets.support_role_ids:
                 guild_config.settings.tickets.support_role_ids.remove(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Support Role", f"{role.mention} removed from support roles."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Found", "This role is not a support role."))

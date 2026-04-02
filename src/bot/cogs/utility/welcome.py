@@ -14,8 +14,9 @@ from src.utils.permissions import require_permission, PermissionLevel
 
 
 class WelcomeCog(commands.Cog, name="Welcome"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'SecurityBot'):
         self.bot = bot
+        self.repos = bot.registry
     
     def _format_welcome_message(
         self,
@@ -45,7 +46,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         if member.bot:
             return
         
-        guild_config = await self.bot.db.get_guild_config(member.guild.id)
+        guild_config = await self.repos.guilds.get_config(member.guild.id)
         if not guild_config:
             return
         
@@ -107,7 +108,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         if member.bot:
             return
         
-        guild_config = await self.bot.db.get_guild_config(member.guild.id)
+        guild_config = await self.repos.guilds.get_config(member.guild.id)
         if not guild_config:
             return
         
@@ -136,7 +137,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     @commands.has_permissions(manage_guild=True)
     async def welcome(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             if not guild_config:
                 return await ctx.send("No configuration found for this server.")
             
@@ -162,27 +163,36 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     @welcome.command(name="enable", description="Enable the welcome system")
     @commands.has_permissions(manage_guild=True)
     async def welcome_enable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.welcome.enabled = True
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Welcome System", "Welcome system has been enabled!"))
     
     @welcome.command(name="disable", description="Disable the welcome system")
     @commands.has_permissions(manage_guild=True)
     async def welcome_disable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.welcome.enabled = False
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Welcome System", "Welcome system has been disabled."))
     
     @welcome.command(name="channel", description="Set the welcome channel")
     @commands.has_permissions(manage_guild=True)
     async def welcome_channel(self, ctx: commands.Context, channel: discord.TextChannel):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.welcome.channel_id = channel.id
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Welcome Channel", f"Welcome channel set to {channel.mention}"))
     
@@ -192,9 +202,12 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         if len(message) > 2000:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Message must be 2000 characters or less."))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.welcome.message = message
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         embed = (
             EmbedBuilder(
@@ -212,9 +225,12 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     @welcome.command(name="dm", description="Toggle DM welcome messages")
     @commands.has_permissions(manage_guild=True)
     async def welcome_dm(self, ctx: commands.Context, enabled: bool):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.welcome.dm_enabled = enabled
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         status = "enabled" if enabled else "disabled"
         await ctx.send(embed=EmbedBuilder.success("DM Welcome", f"DM welcome messages have been {status}."))
@@ -225,18 +241,24 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         if len(message) > 2000:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Message must be 2000 characters or less."))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.welcome.dm_message = message
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("DM Message Updated", "The DM welcome message has been updated."))
     
     @welcome.command(name="embed", description="Toggle embed mode for welcome messages")
     @commands.has_permissions(manage_guild=True)
     async def welcome_embed(self, ctx: commands.Context, enabled: bool):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.welcome.embed_enabled = enabled
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         status = "enabled" if enabled else "disabled"
         await ctx.send(embed=EmbedBuilder.success("Embed Mode", f"Embed mode has been {status}."))
@@ -244,7 +266,9 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     @welcome.command(name="autorole", description="Manage auto-roles for new members")
     @commands.has_permissions(manage_guild=True)
     async def welcome_autorole(self, ctx: commands.Context, action: str, role: discord.Role = None):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
         
         if action.lower() == "add":
             if not role:
@@ -255,7 +279,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             
             if role.id not in guild_config.settings.welcome.auto_role_ids:
                 guild_config.settings.welcome.auto_role_ids.append(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Auto Role", f"{role.mention} will be given to new members."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Already Added", "This role is already an auto-role."))
@@ -266,7 +290,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             
             if role.id in guild_config.settings.welcome.auto_role_ids:
                 guild_config.settings.welcome.auto_role_ids.remove(role.id)
-                await self.bot.db.save_guild_config(guild_config)
+                await self.repos.guilds.save_config(guild_config)
                 await ctx.send(embed=EmbedBuilder.success("Auto Role", f"{role.mention} removed from auto-roles."))
             else:
                 await ctx.send(embed=EmbedBuilder.warning("Not Found", "This role is not an auto-role."))
@@ -295,7 +319,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     @welcome.command(name="test", description="Test the welcome message")
     @commands.has_permissions(manage_guild=True)
     async def welcome_test(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
         if not guild_config:
             return await ctx.send(embed=EmbedBuilder.error("Error", "No configuration found."))
         
@@ -315,7 +339,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     @commands.has_permissions(manage_guild=True)
     async def goodbye(self, ctx: commands.Context):
         if ctx.invoked_subcommand is None:
-            guild_config = await self.bot.db.get_guild_config(ctx.guild.id)
+            guild_config = await self.repos.guilds.get_config(ctx.guild.id)
             if not guild_config:
                 return await ctx.send("No configuration found for this server.")
             
@@ -339,27 +363,36 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     @goodbye.command(name="enable", description="Enable the goodbye system")
     @commands.has_permissions(manage_guild=True)
     async def goodbye_enable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.goodbye.enabled = True
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Goodbye System", "Goodbye system has been enabled!"))
     
     @goodbye.command(name="disable", description="Disable the goodbye system")
     @commands.has_permissions(manage_guild=True)
     async def goodbye_disable(self, ctx: commands.Context):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.goodbye.enabled = False
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Goodbye System", "Goodbye system has been disabled."))
     
     @goodbye.command(name="channel", description="Set the goodbye channel")
     @commands.has_permissions(manage_guild=True)
     async def goodbye_channel(self, ctx: commands.Context, channel: discord.TextChannel):
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.goodbye.channel_id = channel.id
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Goodbye Channel", f"Goodbye channel set to {channel.mention}"))
     
@@ -369,9 +402,12 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         if len(message) > 2000:
             return await ctx.send(embed=EmbedBuilder.error("Error", "Message must be 2000 characters or less."))
         
-        guild_config = await self.bot.db.get_or_create_guild_config(ctx.guild.id)
+        guild_config = await self.repos.guilds.get_config(ctx.guild.id)
+        if not guild_config:
+            guild_config = GuildConfig(guild_id=ctx.guild.id)
+            
         guild_config.settings.goodbye.message = message
-        await self.bot.db.save_guild_config(guild_config)
+        await self.repos.guilds.save_config(guild_config)
         
         await ctx.send(embed=EmbedBuilder.success("Goodbye Message", "The goodbye message has been updated."))
 
