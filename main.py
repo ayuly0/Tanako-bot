@@ -15,19 +15,11 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-from src.db_manager import DatabaseManager
-from src.cogs import (
-    WelcomeCog,
-    ModerationCog,
-    TicketsCog,
-    AntiRaidCog,
-    AntiNukeCog,
-    FilterCog,
-    LoggingCog,
-    AutoModCog,
-    AdminCog,
-    UtilityCog
-)
+from src.database.manager import DatabaseManager
+from src.bot.cogs.utility import WelcomeCog, TicketsCog, LevelingCog, SecretChatCog, HostCheckCog, UtilityCog
+from src.bot.cogs.moderation import ModerationCog, AntiNukeCog, AntiRaidCog
+from src.bot.cogs.security import FilterCog, AutoModCog
+from src.bot.cogs.core import AdminCog, MetricsCog, LoggingCog
 
 load_dotenv()
 
@@ -78,40 +70,16 @@ class SecurityBot(commands.AutoShardedBot):
             LoggingCog(self),
             AutoModCog(self),
             AdminCog(self),
-            UtilityCog(self)
+            UtilityCog(self),
+            LevelingCog(self),
+            SecretChatCog(self),
+            HostCheckCog(self),
+            MetricsCog(self)
         ]
         
         for cog in cogs:
             await self.add_cog(cog)
             logger.info(f"Loaded cog: {cog.__class__.__name__}")
-        
-        try:
-            from src.cogs.leveling import LevelingCog
-            await self.add_cog(LevelingCog(self))
-            logger.info("Loaded cog: LevelingCog")
-        except ImportError:
-            logger.warning("LevelingCog not found, skipping...")
-        
-        try:
-            from src.cogs.secret_chat import SecretChatCog
-            await self.add_cog(SecretChatCog(self))
-            logger.info("Loaded cog: SecretChatCog")
-        except ImportError:
-            logger.warning("SecretChatCog not found, skipping...")
-        
-        try:
-            from src.cogs.host_check import HostCheckCog
-            await self.add_cog(HostCheckCog(self))
-            logger.info("Loaded cog: HostCheckCog")
-        except ImportError:
-            logger.warning("HostCheckCog not found, skipping...")
-        
-        try:
-            from src.cogs.metrics import MetricsCog
-            await self.add_cog(MetricsCog(self))
-            logger.info("Loaded cog: MetricsCog")
-        except ImportError:
-            logger.warning("MetricsCog not found, skipping...")
         
         logger.info(f"Loaded {len(self.cogs)} cogs successfully")
         
