@@ -5,10 +5,11 @@ import sys
 import psutil
 import statistics
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add project root to sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.database.engine.engine import ColumnarDB, Column as EngineColumn
-from src.database.engine.distributed_engine import DistributedColumnarDB, Column as DistributedColumn
+from src.database.engine.legacy import ColumnarDB, Column as EngineColumn
+from src.database.engine.distributed import DistributedColumnarDB, Column as DistributedColumn
 from src.database.engine.storage import DataType
 from src.database.engine.query import query
 

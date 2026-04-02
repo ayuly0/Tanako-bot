@@ -10,26 +10,10 @@ Features:
 - Consistent hashing for guild partitioning across nodes
 """
 
-from .engine import ColumnarDB, Column, Table, DataType
-from .query import QueryBuilder, Condition, OrderBy
-from .storage import StorageManager, BinaryEncoder, BinaryDecoder, ColumnMetadata
-from .index import IndexManager, BTreeIndex, HashIndex, IndexType
-from .transaction import TransactionManager, Transaction
-from .cache import CacheManager, LRUCache, QueryCache
-
-from .memtable import (
-    MemTable, MemTableManager, MemTableState,
-    SSTableWriter, SSTableReader, SSTableMetadata,
-    FlushService, BloomFilter, SkipList
-)
-
-from .cluster import (
-    ClusterManager, NodeInfo, NodeState,
-    ConsistentHashRing, NodeRegistry, NodeClient,
-    DistributedCache
-)
-
-from .distributed_engine import DistributedColumnarDB, TableSchema
+from .engine.legacy import ColumnarDB, Column, Table, DataType
+from .engine.query import QueryBuilder, Condition, OrderBy
+from .engine.storage import StorageManager, BinaryEncoder, BinaryDecoder, ColumnMetadata
+from .engine.distributed import DistributedColumnarDB
 
 __all__ = [
     'ColumnarDB',
